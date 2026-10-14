@@ -430,6 +430,31 @@ EMSCRIPTEN_KEEPALIVE void resumeAudio() {
 	mSDLResumeAudio(&renderer->audio);
 }
 
+// Direct pointer into a core memory region (GBA: 2=EWRAM, 3=IWRAM, 8=ROM); size via getMemoryBlockSize.
+// Callers should bracket accesses with interruptCore/continueCore so the core thread is not mid-frame.
+static size_t memoryBlockSize = 0;
+
+EMSCRIPTEN_KEEPALIVE void* getMemoryBlock(int id) {
+	memoryBlockSize = 0;
+	if (!renderer->core)
+		return NULL;
+	return renderer->core->getMemoryBlock(renderer->core, id, &memoryBlockSize);
+}
+
+EMSCRIPTEN_KEEPALIVE int getMemoryBlockSize() {
+	return memoryBlockSize;
+}
+
+EMSCRIPTEN_KEEPALIVE void interruptCore() {
+	if (renderer->thread)
+		mCoreThreadInterrupt(renderer->thread);
+}
+
+EMSCRIPTEN_KEEPALIVE void continueCore() {
+	if (renderer->thread)
+		mCoreThreadContinue(renderer->thread);
+}
+
 EMSCRIPTEN_KEEPALIVE void setEventEnable(bool toggle) {
 	int state = toggle ? SDL_ENABLE : SDL_DISABLE;
 	SDL_EventState(SDL_TEXTINPUT, state);

@@ -295,6 +295,21 @@ Module.resumeAudio = () => {
   resumeAudio();
 };
 
+Module.getMemoryBlock = (id) => {
+  const ptr = cwrap("getMemoryBlock", "number", ["number"])(id);
+  const size = cwrap("getMemoryBlockSize", "number", [])();
+  return ptr ? new Uint8Array(HEAPU8.buffer, ptr, size) : null;
+};
+
+Module.withCoreInterrupted = (fn) => {
+  cwrap("interruptCore", null, [])();
+  try {
+    return fn();
+  } finally {
+    cwrap("continueCore", null, [])();
+  }
+};
+
 Module.getVolume = () => {
   const getVolume = cwrap("getVolume", "number", []);
   return getVolume();
