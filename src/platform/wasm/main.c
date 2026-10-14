@@ -278,11 +278,12 @@ void updateFastForward(double multiplier) {
 		return;
 	}
 
+	// No interrupt here: blocking the main thread on the core thread deadlocks whenever the core is itself
+	// waiting on the main thread (synchronous callbacks such as videoFrameEnded, or file I/O while saving).
+	// These are plain flags the sync loop re-reads every frame, so writing them directly is safe.
 	if (renderer->thread && renderer->videoSync) {
-		mCoreThreadInterrupt(renderer->thread);
 		renderer->thread->impl->sync.videoFrameWait = (multiplier > 1) ? false : renderer->videoSync;
 		renderer->thread->impl->sync.audioWait = (multiplier > 1) ? true : renderer->audioSync;
-		mCoreThreadContinue(renderer->thread);
 	}
 
 	if (renderer->core && renderer->thread && multiplier != 0) {
@@ -431,7 +432,7 @@ EMSCRIPTEN_KEEPALIVE void resumeAudio() {
 }
 
 // Direct pointer into a core memory region (GBA: 2=EWRAM, 3=IWRAM, 8=ROM); size via getMemoryBlockSize.
-// Callers should bracket accesses with interruptCore/continueCore so the core thread is not mid-frame.
+// Access it from videoFrameEndedCallback, which runs while the core thread is blocked at frame end.
 static size_t memoryBlockSize = 0;
 
 EMSCRIPTEN_KEEPALIVE void* getMemoryBlock(int id) {
@@ -443,16 +444,6 @@ EMSCRIPTEN_KEEPALIVE void* getMemoryBlock(int id) {
 
 EMSCRIPTEN_KEEPALIVE int getMemoryBlockSize() {
 	return memoryBlockSize;
-}
-
-EMSCRIPTEN_KEEPALIVE void interruptCore() {
-	if (renderer->thread)
-		mCoreThreadInterrupt(renderer->thread);
-}
-
-EMSCRIPTEN_KEEPALIVE void continueCore() {
-	if (renderer->thread)
-		mCoreThreadContinue(renderer->thread);
 }
 
 EMSCRIPTEN_KEEPALIVE void setEventEnable(bool toggle) {

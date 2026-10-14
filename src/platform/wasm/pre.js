@@ -301,15 +301,6 @@ Module.getMemoryBlock = (id) => {
   return ptr ? new Uint8Array(HEAPU8.buffer, ptr, size) : null;
 };
 
-Module.withCoreInterrupted = (fn) => {
-  cwrap("interruptCore", null, [])();
-  try {
-    return fn();
-  } finally {
-    cwrap("continueCore", null, [])();
-  }
-};
-
 Module.getVolume = () => {
   const getVolume = cwrap("getVolume", "number", []);
   return getVolume();

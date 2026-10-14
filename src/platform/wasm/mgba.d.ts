@@ -419,18 +419,12 @@ declare namespace mGBA {
     /**
      * Returns a live view into a core memory region (shared with the core thread).
      * GBA ids: 2 = EWRAM (0x02000000), 3 = IWRAM (0x03000000), 8 = ROM (0x08000000).
-     * Access it inside `withCoreInterrupted` to avoid racing the core mid-frame.
+     * Access it from `videoFrameEndedCallback`: that callback runs synchronously while the core thread is
+     * blocked at frame end, so reads and writes can't race the core.
      * @param id - Memory region id.
      * @returns View of the region, or null if no game is loaded.
      */
     getMemoryBlock(id: number): Uint8Array | null;
-
-    /**
-     * Pauses the core thread, runs `fn`, then resumes it.
-     * @param fn - Work to do while the core is stopped.
-     * @returns The return value of `fn`.
-     */
-    withCoreInterrupted<T>(fn: () => T): T;
 
     /**
      * Pauses the game emulation.
