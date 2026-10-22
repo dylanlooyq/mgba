@@ -14,6 +14,7 @@
 #include <mgba/gba/core.h>
 #include <mgba/gba/interface.h>
 #include <mgba/internal/gba/input.h>
+#include <mgba/internal/gba/memory.h>
 #include <mgba/internal/gba/sio.h>
 #include <mgba/internal/gba/sio/lockstep.h>
 
@@ -1049,7 +1050,8 @@ EMSCRIPTEN_KEEPALIVE int netplayPlayerCount(void) {
 	return netplay ? netplay->playerCount : 0;
 }
 
-// FNV-1a of every core's save state, to check that all browsers still agree.
+// FNV-1a of every core's work RAM (EWRAM and IWRAM), to check that all browsers still agree. Not the whole save
+// state: that holds per-browser settings too, such as the volume (only our player's GBA is heard, and muted at speed).
 EMSCRIPTEN_KEEPALIVE unsigned netplayStateHash(void) {
 	if (!netplay) {
 		return 0;
@@ -1057,14 +1059,13 @@ EMSCRIPTEN_KEEPALIVE unsigned netplayStateHash(void) {
 	uint32_t hash = 2166136261u;
 	for (int i = 0; i < netplay->playerCount; ++i) {
 		struct mCore* core = netplay->cores[i];
-		size_t size = core->stateSize(core);
-		uint8_t* state = calloc(1, size);
-		if (state && core->saveState(core, state)) {
-			for (size_t j = 0; j < size; ++j) {
-				hash = (hash ^ state[j]) * 16777619u;
+		for (int id = GBA_REGION_EWRAM; id <= GBA_REGION_IWRAM; ++id) {
+			size_t size = 0;
+			const uint8_t* block = core->getMemoryBlock(core, id, &size);
+			for (size_t j = 0; block && j < size; ++j) {
+				hash = (hash ^ block[j]) * 16777619u;
 			}
 		}
-		free(state);
 	}
 	return hash;
 }
