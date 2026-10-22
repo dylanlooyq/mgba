@@ -4,7 +4,7 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} \
 	-s INITIAL_MEMORY=256mb \
 	-s EXPORTED_RUNTIME_METHODS=[\"FS\",\"cwrap\",\"addFunction\",\"removeFunction\"] \
 	-s ALLOW_TABLE_GROWTH=1 \
-	-s ENVIRONMENT='web,worker' \
+	-s ENVIRONMENT=web,worker \
 	-s PTHREAD_POOL_SIZE=5 \
 	-s EXPORT_ES6=1 \
 	-s MODULARIZE=1 \

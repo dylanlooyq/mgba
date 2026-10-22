@@ -11,6 +11,7 @@
 #include <mgba/core/serialize.h>
 #include <mgba/core/thread.h>
 #include <mgba/core/version.h>
+#include <mgba/gba/core.h>
 #include <mgba/gba/interface.h>
 #include <mgba/internal/gba/input.h>
 #include <mgba/internal/gba/sio.h>
@@ -48,6 +49,32 @@ typedef struct {
 
 static mEmscriptenLinkSession* linkSession = NULL;
 
+// Netplay: every player's GBA runs here, on the main thread, one frame per netplayRunFrame call, so every browser in
+// a session computes the same frames from the same ROM, saves, clock and buttons. Only the buttons travel between
+// browsers (the page's job). Unlike linkSession there are no threads: their timing would differ between machines.
+typedef struct {
+	struct mLockstepUser d;
+	int index;
+} mNetplayUser;
+
+typedef struct {
+	int playerCount;
+	int localPlayer; // 0-based: whose screen and sound this browser shows, and whose keys it reads
+	uint32_t localKeys;
+	uint32_t pressed; // pressed since netplayLocalKeys last asked, so a tap during a wait for the others still counts
+	void* rom; // one copy, shared read-only by every core
+	size_t romSize;
+	struct mCore* cores[MAX_GBAS];
+	mColor* outputBuffers[MAX_GBAS];
+	bool asleep[MAX_GBAS];
+	struct GBASIOLockstepCoordinator coordinator;
+	struct GBASIOLockstepDriver sioDrivers[MAX_GBAS];
+	mNetplayUser users[MAX_GBAS];
+} mEmscriptenNetplay;
+
+static mEmscriptenNetplay* netplay = NULL;
+static void destroyNetplay(void);
+
 // log utilities
 static void _log(struct mLogger*, int category, enum mLogLevel level, const char* format, va_list args);
 static struct mLogFilter logFilter;
@@ -67,6 +94,9 @@ static bool linkPlayerIndexValid(int player) {
 }
 
 static struct mCore* activeInputCore(void) {
+	if (netplay) {
+		return netplay->cores[netplay->localPlayer];
+	}
 	if (linkPlayerIndexValid(linkSession ? linkSession->activePlayer : 0)) {
 		return linkSession->cores[linkSession->activePlayer - 1];
 	}
@@ -196,6 +226,11 @@ EMSCRIPTEN_KEEPALIVE bool screenshot(char* fileName) {
 }
 
 EMSCRIPTEN_KEEPALIVE void buttonPress(int id) {
+	if (netplay) {
+		netplay->localKeys |= 1 << id;
+		netplay->pressed |= 1 << id;
+		return;
+	}
 	struct mCore* core = activeInputCore();
 	if (core) {
 		core->addKeys(core, 1 << id);
@@ -203,6 +238,10 @@ EMSCRIPTEN_KEEPALIVE void buttonPress(int id) {
 }
 
 EMSCRIPTEN_KEEPALIVE void buttonUnpress(int id) {
+	if (netplay) {
+		netplay->localKeys &= ~(1 << id);
+		return;
+	}
 	struct mCore* core = activeInputCore();
 	if (core) {
 		core->clearKeys(core, 1 << id);
@@ -220,6 +259,12 @@ EMSCRIPTEN_KEEPALIVE void setVolume(float vol) {
 
 	int volume = (int) (vol * 0x100);
 	renderer->volume = volume;
+	if (netplay) {
+		struct mCore* core = netplay->cores[netplay->localPlayer];
+		mCoreConfigSetDefaultIntValue(&core->config, "volume", volume);
+		core->reloadConfigOption(core, "volume", &core->config);
+		return;
+	}
 	if (linkSession && linkSession->running) {
 		for (int i = 0; i < linkSession->playerCount; ++i) {
 			struct mCore* core = linkSession->cores[i];
@@ -318,6 +363,7 @@ EMSCRIPTEN_KEEPALIVE int getFastForwardMultiplier() {
 
 EMSCRIPTEN_KEEPALIVE void quitGame() {
 	destroyLinkSession();
+	destroyNetplay();
 
 	if (renderer->core && renderer->thread) {
 		emscripten_pause_main_loop();
@@ -437,9 +483,10 @@ static size_t memoryBlockSize = 0;
 
 EMSCRIPTEN_KEEPALIVE void* getMemoryBlock(int id) {
 	memoryBlockSize = 0;
-	if (!renderer->core)
+	struct mCore* core = netplay ? netplay->cores[netplay->localPlayer] : renderer->core;
+	if (!core)
 		return NULL;
-	return renderer->core->getMemoryBlock(renderer->core, id, &memoryBlockSize);
+	return core->getMemoryBlock(core, id, &memoryBlockSize);
 }
 
 EMSCRIPTEN_KEEPALIVE int getMemoryBlockSize() {
@@ -461,6 +508,11 @@ EMSCRIPTEN_KEEPALIVE void setEventEnable(bool toggle) {
 // this should work for a good variety of keys, but not all are supported yet
 EMSCRIPTEN_KEEPALIVE void bindKey(char* bindingName, int inputCode) {
 	int bindingSDLKeyCode = SDL_GetKeyFromName(bindingName);
+
+	if (netplay) {
+		mInputBindKey(&netplay->cores[netplay->localPlayer]->inputMap, SDL_BINDING_KEY, bindingSDLKeyCode, inputCode);
+		return;
+	}
 
 	if (linkSession && linkSession->running) {
 		for (int i = 0; i < linkSession->playerCount; ++i) {
@@ -517,6 +569,7 @@ EMSCRIPTEN_KEEPALIVE bool autoLoadCheats() {
 
 EMSCRIPTEN_KEEPALIVE bool loadGame(const char* name, const char* savePathOverride) {
 	destroyLinkSession();
+	destroyNetplay();
 
 	if (renderer->thread && renderer->core) {
 		quitGame();
@@ -684,6 +737,7 @@ EMSCRIPTEN_KEEPALIVE bool linkLocalStartSession(const char* player1RomPath, cons
 		quitGame();
 	}
 	destroyLinkSession();
+	destroyNetplay();
 	linkSession = calloc(1, sizeof(mEmscriptenLinkSession));
 	if (!linkSession) {
 		return false;
@@ -763,6 +817,260 @@ EMSCRIPTEN_KEEPALIVE int linkLocalGetActivePlayer(void) {
 
 EMSCRIPTEN_KEEPALIVE int linkLocalIsRunning(void) {
 	return linkSession && linkSession->running;
+}
+
+static void netplaySleep(struct mLockstepUser* user) {
+	netplay->asleep[((mNetplayUser*) user)->index] = true;
+}
+
+static void netplayWake(struct mLockstepUser* user) {
+	netplay->asleep[((mNetplayUser*) user)->index] = false;
+}
+
+static int netplayRequestedId(struct mLockstepUser* user) {
+	return ((mNetplayUser*) user)->index;
+}
+
+static void destroyNetplay(void) {
+	if (!netplay) {
+		return;
+	}
+	if (renderer->audio.core) {
+		mSDLPauseAudio(&renderer->audio);
+		mSDLDeinitAudio(&renderer->audio);
+		renderer->audio.core = NULL;
+	}
+	for (int i = 0; i < netplay->playerCount; ++i) {
+		struct mCore* core = netplay->cores[i];
+		if (core) {
+			core->unloadROM(core);
+			mCoreConfigDeinit(&core->config);
+			mInputMapDeinit(&core->inputMap);
+			core->deinit(core);
+		}
+		free(netplay->outputBuffers[i]);
+	}
+	GBASIOLockstepCoordinatorDeinit(&netplay->coordinator);
+	free(netplay->rom);
+	free(netplay);
+	netplay = NULL;
+}
+
+static bool setupNetplayCore(int index, const char* savePath, double epochMs) {
+	struct mCore* core = GBACoreCreate();
+	if (!core) {
+		return false;
+	}
+	core->init(core);
+	netplay->cores[index] = core; // from here on destroyNetplay frees it
+	core->opts.savegamePath = strdup("/data/saves");
+	core->opts.savestatePath = strdup("/data/states");
+	core->opts.cheatsPath = strdup("/data/cheats");
+	core->opts.screenshotPath = strdup("/data/screenshots");
+	core->opts.patchPath = strdup("/data/patches");
+	core->opts.audioBuffers = renderer->audio.samples;
+
+	// The same options in every browser: anything that changes how a core runs would split the copies apart.
+	mCoreConfigInit(&core->config, "wasm");
+	struct mCoreOptions defaultConfigOpts = { .useBios = true,
+	                                          .rewindEnable = false,
+	                                          .videoSync = false,
+	                                          .audioSync = false,
+	                                          .fpsTarget = renderer->baseFpsTarget,
+	                                          .volume = renderer->volume,
+	                                          .logLevel = mLOG_WARN | mLOG_ERROR | mLOG_FATAL };
+	mCoreConfigLoadDefaults(&core->config, &defaultConfigOpts);
+	mCoreLoadConfig(core);
+	mCoreConfigSetDefaultValue(&core->config, "idleOptimization", "detect");
+	mCoreConfigSetDefaultIntValue(&core->config, "allowOpposingDirections", true);
+	mCoreConfigSetDefaultIntValue(&core->config, "threadedVideo", false);
+	core->reloadConfigOption(core, "idleOptimization", &core->config);
+	core->reloadConfigOption(core, "allowOpposingDirections", &core->config);
+	core->reloadConfigOption(core, "threadedVideo", &core->config);
+	mInputMapInit(&core->inputMap, &GBAInputInfo);
+	mDirectorySetMapOptions(&core->dirs, &core->opts);
+
+	struct VFile* rom = VFileFromConstMemory(netplay->rom, netplay->romSize);
+	if (!rom || !core->loadROM(core, rom)) {
+		if (rom)
+			rom->close(rom);
+		return false;
+	}
+	// No cheats or patches: they're per browser.
+	if (!mCoreLoadSaveFile(core, savePath, false)) {
+		return false;
+	}
+	mSDLInitBindingsGBA(&core->inputMap);
+
+	// The clock runs from a shared start time at the emulated rate, never the host's clock.
+	core->rtc.override = RTC_FAKE_EPOCH;
+	core->rtc.value = (int64_t) epochMs;
+
+	unsigned w, h;
+	core->baseVideoSize(core, &w, &h);
+	netplay->outputBuffers[index] = calloc(w * h, sizeof(mColor));
+	if (!netplay->outputBuffers[index]) {
+		return false;
+	}
+	core->setVideoBuffer(core, netplay->outputBuffers[index], w);
+	core->setAudioBufferSize(core, renderer->audio.samples);
+
+	netplay->users[index].index = index;
+	netplay->users[index].d.sleep = netplaySleep;
+	netplay->users[index].d.wake = netplayWake;
+	netplay->users[index].d.requestedId = netplayRequestedId;
+	GBASIOLockstepDriverCreate(&netplay->sioDrivers[index], &netplay->users[index].d);
+	GBASIOLockstepCoordinatorAttach(&netplay->coordinator, &netplay->sioDrivers[index]);
+	core->setPeripheral(core, mPERIPH_GBA_LINK_PORT, &netplay->sioDrivers[index].d);
+	core->reset(core);
+	return true;
+}
+
+// savePaths: one per player, joined by '\n' (player 1's is the link's first port). epochMs: the shared clock's start.
+EMSCRIPTEN_KEEPALIVE bool netplayStart(const char* romPath, const char* savePaths, int localPlayer, double epochMs) {
+	if (!renderer || !romPath || !savePaths) {
+		return false;
+	}
+	if (renderer->core && renderer->thread) {
+		quitGame();
+	}
+	destroyLinkSession();
+	destroyNetplay();
+
+	struct VFile* vf = VFileOpen(romPath, O_RDONLY);
+	if (!vf) {
+		return false;
+	}
+	netplay = calloc(1, sizeof(mEmscriptenNetplay));
+	netplay->romSize = vf->size(vf);
+	netplay->rom = malloc(netplay->romSize);
+	bool read = netplay->rom && vf->read(vf, netplay->rom, netplay->romSize) == (ssize_t) netplay->romSize;
+	vf->close(vf);
+	GBASIOLockstepCoordinatorInit(&netplay->coordinator);
+	if (!read) {
+		destroyNetplay();
+		return false;
+	}
+
+	char* paths = strdup(savePaths);
+	char* rest = paths;
+	char* path;
+	while ((path = strsep(&rest, "\n")) && netplay->playerCount < MAX_GBAS) {
+		if (!setupNetplayCore(netplay->playerCount++, path, epochMs)) {
+			free(paths);
+			destroyNetplay();
+			return false;
+		}
+	}
+	free(paths);
+	if (localPlayer < 0 || localPlayer >= netplay->playerCount) {
+		destroyNetplay();
+		return false;
+	}
+	netplay->localPlayer = localPlayer;
+
+	unsigned w, h;
+	netplay->cores[0]->baseVideoSize(netplay->cores[0], &w, &h);
+	if (renderer->sdlTex) {
+		SDL_DestroyTexture(renderer->sdlTex);
+	}
+	renderer->sdlTex = SDL_CreateTexture(renderer->sdlRenderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+	SDL_SetWindowSize(renderer->window, w, h);
+	EM_ASM(
+	    {
+		    Module.canvas.width = $0;
+		    Module.canvas.height = $1;
+	    },
+	    w, h);
+
+	// Only our player's sound. Without a sync object the other cores' sound buffers just fill and drop.
+	if (mSDLInitAudio(&renderer->audio, NULL)) {
+		renderer->audio.core = netplay->cores[localPlayer];
+		renderer->audio.sync = NULL;
+		mSDLResumeAudio(&renderer->audio);
+	}
+	emscripten_resume_main_loop();
+	return true;
+}
+
+// Runs every player's GBA until each has finished a frame, with each player's buttons held throughout. The order is
+// fixed, so every browser runs the cores identically. A core waiting at the link (asleep) is skipped until the
+// others wake it; one that has finished its frame runs on only if everyone still short of theirs is waiting on it.
+EMSCRIPTEN_KEEPALIVE bool netplayRunFrame(int keys0, int keys1, int keys2, int keys3) {
+	if (!netplay) {
+		return false;
+	}
+	const int keys[MAX_GBAS] = { keys0, keys1, keys2, keys3 };
+	uint32_t start[MAX_GBAS];
+	for (int i = 0; i < netplay->playerCount; ++i) {
+		netplay->cores[i]->setKeys(netplay->cores[i], keys[i]);
+		start[i] = netplay->cores[i]->frameCounter(netplay->cores[i]);
+	}
+	for (int guard = 0; guard < 1 << 20; ++guard) {
+		bool done = true, ran = false;
+		for (int i = 0; i < netplay->playerCount; ++i) {
+			struct mCore* core = netplay->cores[i];
+			if (core->frameCounter(core) != start[i]) {
+				continue;
+			}
+			done = false;
+			if (!netplay->asleep[i]) {
+				core->runLoop(core);
+				ran = true;
+			}
+		}
+		if (done) {
+			return true;
+		}
+		for (int i = 0; !ran && i < netplay->playerCount; ++i) {
+			if (!netplay->asleep[i]) {
+				netplay->cores[i]->runLoop(netplay->cores[i]);
+				ran = true;
+			}
+		}
+		if (!ran) {
+			return false; // everyone asleep: the link is stuck
+		}
+	}
+	return false;
+}
+
+// The keys our player is holding (keyboard and buttonPress), for the page to send to the others.
+EMSCRIPTEN_KEEPALIVE int netplayLocalKeys(void) {
+	if (!netplay) {
+		return 0;
+	}
+	uint32_t keys = netplay->localKeys | netplay->pressed;
+	netplay->pressed = 0;
+	return keys;
+}
+
+EMSCRIPTEN_KEEPALIVE int netplayPlayerCount(void) {
+	return netplay ? netplay->playerCount : 0;
+}
+
+// FNV-1a of every core's save state, to check that all browsers still agree.
+EMSCRIPTEN_KEEPALIVE unsigned netplayStateHash(void) {
+	if (!netplay) {
+		return 0;
+	}
+	uint32_t hash = 2166136261u;
+	for (int i = 0; i < netplay->playerCount; ++i) {
+		struct mCore* core = netplay->cores[i];
+		size_t size = core->stateSize(core);
+		uint8_t* state = calloc(1, size);
+		if (state && core->saveState(core, state)) {
+			for (size_t j = 0; j < size; ++j) {
+				hash = (hash ^ state[j]) * 16777619u;
+			}
+		}
+		free(state);
+	}
+	return hash;
+}
+
+EMSCRIPTEN_KEEPALIVE void netplayStop(void) {
+	destroyNetplay();
 }
 
 EMSCRIPTEN_KEEPALIVE bool saveStateSlot(int slot, int flags) {
@@ -1061,6 +1369,36 @@ void updateAutoSaveState() {
 // emscripten main run loop
 void runLoop() {
 	union SDL_Event event;
+
+	if (netplay) {
+		// The page runs the frames (netplayRunFrame); here we only take our player's keys and show their screen.
+		struct mCore* core = netplay->cores[netplay->localPlayer];
+		while (SDL_PollEvent(&event)) {
+			if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) && !(event.key.keysym.mod & ~(KMOD_NUM | KMOD_CAPS))) {
+				int key = mInputMapKey(&core->inputMap, SDL_BINDING_KEY, event.key.keysym.sym);
+				if (key != -1 && event.type == SDL_KEYDOWN) {
+					netplay->localKeys |= 1 << key;
+					netplay->pressed |= 1 << key;
+				} else if (key != -1) {
+					netplay->localKeys &= ~(1 << key);
+				}
+			}
+		}
+		unsigned w, h;
+		core->currentVideoSize(core, &w, &h);
+		void* pixels = NULL;
+		int pitch = 0;
+		if (SDL_LockTexture(renderer->sdlTex, 0, &pixels, &pitch) == 0) {
+			for (unsigned y = 0; y < h; ++y) {
+				memcpy((uint8_t*) pixels + y * pitch, netplay->outputBuffers[netplay->localPlayer] + y * w, w * BYTES_PER_PIXEL);
+			}
+			SDL_UnlockTexture(renderer->sdlTex);
+		}
+		SDL_Rect rect = { .x = 0, .y = 0, .w = w, .h = h };
+		SDL_RenderCopy(renderer->sdlRenderer, renderer->sdlTex, &rect, &rect);
+		SDL_RenderPresent(renderer->sdlRenderer);
+		return;
+	}
 
 	if (linkSession && linkSession->running) {
 		while (SDL_PollEvent(&event)) {
