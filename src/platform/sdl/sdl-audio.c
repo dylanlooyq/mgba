@@ -137,7 +137,9 @@ static void _mSDLAudioCallback(void* context, Uint8* data, int len) {
 			fauxClock = mCoreCalculateFramerateRatio(audioContext->core, audioContext->sync->fpsTarget);
 		}
 		mCoreSyncLockAudio(audioContext->sync);
-		audioContext->sync->audioHighWater = audioContext->samples + audioContext->resampler.highWaterMark +
+		// One callback's worth of reserve on top: in a browser this callback shares the main thread with the
+		// core's frame hook, and without the reserve any short stall there runs the speakers dry (a click).
+		audioContext->sync->audioHighWater = 2 * audioContext->samples + audioContext->resampler.highWaterMark +
 		    audioContext->resampler.lowWaterMark + (audioContext->samples >> 6);
 		audioContext->sync->audioHighWater *= sampleRate / (fauxClock * audioContext->obtainedSpec.freq);
 	}
