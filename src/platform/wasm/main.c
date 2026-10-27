@@ -6,6 +6,7 @@
 #include "main.h"
 
 #include <mgba-util/vfs.h>
+#include <mgba/core/cheats.h>
 #include <mgba/core/core.h>
 #include <mgba/core/lockstep.h>
 #include <mgba/core/serialize.h>
@@ -561,6 +562,13 @@ EMSCRIPTEN_KEEPALIVE bool autoLoadCheats() {
 	if (renderer->core && renderer->thread) {
 		bool result = false;
 		mCoreThreadInterrupt(renderer->thread);
+		// Replaces the cheats rather than adding to them, so editing the codes and reloading doesn't stack them.
+		struct mCheatDevice* device = renderer->core->cheatDevice(renderer->core);
+		while (mCheatSetsSize(&device->cheats)) {
+			struct mCheatSet* set = *mCheatSetsGetPointer(&device->cheats, mCheatSetsSize(&device->cheats) - 1);
+			mCheatRemoveSet(device, set);
+			mCheatSetDeinit(set);
+		}
 		result = mCoreAutoloadCheats(renderer->core);
 		mCoreThreadContinue(renderer->thread);
 		return result;
