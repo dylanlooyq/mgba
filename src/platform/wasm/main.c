@@ -1424,15 +1424,8 @@ EMSCRIPTEN_KEEPALIVE void setIntegerCoreSetting(char* settingName, int value) {
  */
 
 // keypress utilities
+// No hardwired F (fast forward) or R (rewind): they swallowed those keys when a player bound a button to them.
 static void handleKeypressCore(const struct SDL_KeyboardEvent* event) {
-	if (event->keysym.sym == SDLK_f && renderer->fastForwardMultiplier == 1) {
-		updateFastForward(event->type == SDL_KEYDOWN ? 2 : 1);
-		return;
-	}
-	if (event->keysym.sym == SDLK_r) {
-		mCoreThreadSetRewinding(renderer->thread, event->type == SDL_KEYDOWN);
-		return;
-	}
 	int key = -1;
 	if (!(event->keysym.mod & ~(KMOD_NUM | KMOD_CAPS))) {
 		key = mInputMapKey(&renderer->core->inputMap, SDL_BINDING_KEY, event->keysym.sym);
