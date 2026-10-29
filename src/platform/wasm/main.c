@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "main.h"
 
+#include <mgba-util/memory.h>
 #include <mgba-util/vfs.h>
 #include <mgba/core/cheats.h>
 #include <mgba/core/core.h>
@@ -1157,28 +1158,55 @@ EMSCRIPTEN_KEEPALIVE bool netplayLoadState(const uint8_t* data, uint32_t size) {
 	if (count != (uint32_t) netplay->playerCount) {
 		return false;
 	}
+	// Every GBA's state first, then every GBA's link state: loading a GBA's registers sets its link mode, which queues
+	// events for the other GBAs and wakes or waits on them. Those would land on top of link state already loaded, and
+	// the GBAs that kept running never had them (a rejoiner's link could then hang).
+	struct mStateExtdata extdata[MAX_GBAS];
+	int extracted = 0;
+	bool ok = true;
 	uint32_t at = 8;
-	for (int i = 0; i < netplay->playerCount; ++i) {
-		uint32_t len;
-		if (size - at < 4) {
-			return false;
+	for (int i = 0; i < netplay->playerCount && ok; ++i) {
+		uint32_t len = 0;
+		ok = size - at >= 4;
+		if (ok) {
+			LOAD_32LE(len, at, data);
+			ok = size - at - 4 >= len;
 		}
-		LOAD_32LE(len, at, data);
-		if (size - at - 4 < len) {
-			return false;
-		}
-		struct VFile* vf = VFileFromConstMemory(data + at + 4, len);
-		bool ok = vf && mCoreLoadStateNamed(netplay->cores[i], vf, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
-		if (vf) {
+		struct VFile* vf = ok ? VFileFromConstMemory(data + at + 4, len) : NULL;
+		ok = !!vf;
+		if (ok) {
+			struct mCore* core = netplay->cores[i];
+			mStateExtdataInit(&extdata[i]);
+			extracted = i + 1;
+			void* state = mCoreExtractState(core, vf, &extdata[i]);
+			ok = state && core->loadState(core, state);
+			if (state) {
+				mappedMemoryFree(state, core->stateSize(core));
+			}
 			vf->close(vf);
 		}
-		if (!ok) {
-			return false;
-		}
-		netplay->asleep[i] = (asleep >> i) & 1;
 		at += 4 + len;
 	}
-	return true;
+	for (int i = 0; i < netplay->playerCount && ok; ++i) {
+		struct GBA* gba = netplay->cores[i]->board;
+		mTimingDeschedule(&gba->timing, &netplay->sioDrivers[i].event);
+	}
+	for (int i = 0; i < netplay->playerCount && ok; ++i) {
+		struct mCore* core = netplay->cores[i];
+		ok = core->loadExtraState(core, &extdata[i]);
+		struct mStateExtdataItem item;
+		if (mStateExtdataGet(&extdata[i], EXTDATA_SAVEDATA, &item) && item.data) {
+			core->savedataRestore(core, item.data, item.size, true);
+		}
+		if (mStateExtdataGet(&extdata[i], EXTDATA_RTC, &item) && core->rtc.d.deserialize) {
+			core->rtc.d.deserialize(&core->rtc.d, &item);
+		}
+		netplay->asleep[i] = (asleep >> i) & 1;
+	}
+	for (int i = 0; i < extracted; ++i) {
+		mStateExtdataDeinit(&extdata[i]);
+	}
+	return ok;
 }
 
 EMSCRIPTEN_KEEPALIVE bool saveStateSlot(int slot, int flags) {

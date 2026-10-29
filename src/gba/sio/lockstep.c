@@ -358,6 +358,7 @@ static bool GBASIOLockstepDriverLoadState(struct GBASIODriver* driver, const voi
 	for (i = 0; i < MAX_LOCKSTEP_EVENTS - 1; ++i) {
 		player->buffer[i].next = &player->buffer[i + 1];
 	}
+	player->buffer[MAX_LOCKSTEP_EVENTS - 1].next = NULL;
 	player->freeList = &player->buffer[0];
 	player->queue = NULL;
 
@@ -387,6 +388,7 @@ static bool GBASIOLockstepDriverLoadState(struct GBASIODriver* driver, const voi
 			break;
 		}
 	}
+	*lastEvent = NULL; // else the queue runs on into the free list: stale events, processed as real ones
 
 	if (player->playerId == 0) {
 		LOAD_32LE(coordinator->cycle, 0, &state->coordinator.cycle);
