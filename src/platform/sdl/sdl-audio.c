@@ -34,6 +34,8 @@ static void _mSDLAudioCallback(void* context, Uint8* data, int len);
 static struct {
 	bool on;
 	bool active;
+	bool refill; // just ended: the core's buffer, drained by the stretch, fills back up before it plays
+	double speed;
 	unsigned rate;
 	long segment;
 	long overlap;
@@ -285,7 +287,10 @@ static void _mSDLAudioCallback(void* context, Uint8* data, int len) {
 		double played = audioContext->samples * rate / speed / audioContext->obtainedSpec.freq;
 		if (!_stretch.taken) {
 			_stretch.taken = played * speed;
+		} else if (speed != _stretch.speed) {
+			_stretch.taken *= speed / _stretch.speed; // at once: smoothed, it lagged a second behind
 		}
+		_stretch.speed = speed;
 		_stretch.fill += (mAudioBufferAvailable(&_stretch.out) - _stretch.fill) * 0.1;
 		double target = 2 * played + _stretch.segment; // it comes a segment at a time
 		double error = (_stretch.fill - target) / target;
@@ -293,25 +298,38 @@ static void _mSDLAudioCallback(void* context, Uint8* data, int len) {
 		buffer = &_stretch.out;
 		rate /= speed;
 	} else {
+		_stretch.refill |= _stretch.active;
 		_stretch.active = false;
 	}
+	bool silent = false;
 	if (audioContext->sync && !audioContext->sync->audioWait && buffer) {
 		// Paced by the system clock (timestepSync), the core and the sound card drift apart: nudge the rate by up to
 		// 0.5% (inaudible) to hold the core's buffer near three callbacks, instead of running dry or piling up.
 		double target = 3.0 * audioContext->samples * rate / audioContext->obtainedSpec.freq;
 		double fill = mAudioBufferAvailable(buffer);
-		if (fill > 3 * target) {
-			// After a stall (hidden tab): skip ahead rather than play seconds late
+		if (fill > 3 * target + (_stretch.active ? _stretch.segment : 0)) {
+			// After a stall (hidden tab): skip ahead rather than play seconds late (the stretch adds a segment at a time)
 			mAudioBufferRead(buffer, NULL, fill - target);
 			fill = target;
 			audioContext->fill = target;
 		}
+		if (_stretch.refill) {
+			// Played from near empty, it would take the nudge many seconds to fill (that long a little flat)
+			silent = fill < target;
+			_stretch.refill = silent;
+			audioContext->fill = fill;
+		}
 		audioContext->fill += (fill - audioContext->fill) * 0.05; // the core adds a whole frame's samples at a time
 		double error = (audioContext->fill - target) / target;
-		rate *= 1 + 0.005 * (error > 1 ? 1 : error < -1 ? -1 : error);
+		// Not the stretch's buffer: it holds that one by tempo, nearer a segment, so this one stayed pegged sharp
+		if (!_stretch.active) {
+			rate *= 1 + 0.005 * (error > 1 ? 1 : error < -1 ? -1 : error);
+		}
 	}
-	mAudioResamplerSetSource(&audioContext->resampler, buffer, rate, true);
-	mAudioResamplerProcess(&audioContext->resampler);
+	if (!silent) {
+		mAudioResamplerSetSource(&audioContext->resampler, buffer, rate, true);
+		mAudioResamplerProcess(&audioContext->resampler);
+	}
 	if (audioContext->sync) {
 		mCoreSyncConsumeAudio(audioContext->sync);
 	}
