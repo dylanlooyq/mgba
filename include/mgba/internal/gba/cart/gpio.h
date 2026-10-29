@@ -59,6 +59,8 @@ struct GBARTC {
 	uint8_t time[7];
 	time_t lastLatch;
 	time_t offset;
+	bool fixedZone; // tell the time at zoneOffset (seconds east of UTC), not in the host's timezone
+	int32_t zoneOffset;
 };
 
 DECL_BITFIELD(GPIOPin, uint16_t);

@@ -877,7 +877,7 @@ static void destroyNetplay(void) {
 	netplay = NULL;
 }
 
-static bool setupNetplayCore(int index, const char* savePath, double epochMs) {
+static bool setupNetplayCore(int index, const char* savePath, double epochMs, int32_t zoneOffset) {
 	struct mCore* core = GBACoreCreate();
 	if (!core) {
 		return false;
@@ -944,11 +944,18 @@ static bool setupNetplayCore(int index, const char* savePath, double epochMs) {
 	GBASIOLockstepCoordinatorAttach(&netplay->coordinator, &netplay->sioDrivers[index]);
 	core->setPeripheral(core, mPERIPH_GBA_LINK_PORT, &netplay->sioDrivers[index].d);
 	core->reset(core);
+	// The clock tells the time at its player's UTC offset, not in this browser's timezone. The offset a save's clock
+	// footer gave isn't in a rejoin snapshot (the rejoiner would take it from their own save), so it's dropped.
+	struct GBACartridgeHardware* hw = &((struct GBA*) core->board)->memory.hw;
+	hw->rtc.fixedZone = true;
+	hw->rtc.zoneOffset = zoneOffset;
+	hw->rtc.offset = 0;
 	return true;
 }
 
 // savePaths: one per player, joined by '\n' (player 1's is the link's first port). epochMs: the shared clock's start.
-EMSCRIPTEN_KEEPALIVE bool netplayStart(const char* romPath, const char* savePaths, int localPlayer, double epochMs) {
+// zones: each player's UTC offset in minutes east, joined by '\n', for their GBA's clock (missing ones are UTC).
+EMSCRIPTEN_KEEPALIVE bool netplayStart(const char* romPath, const char* savePaths, int localPlayer, double epochMs, const char* zones) {
 	if (!renderer || !romPath || !savePaths) {
 		return false;
 	}
@@ -976,8 +983,12 @@ EMSCRIPTEN_KEEPALIVE bool netplayStart(const char* romPath, const char* savePath
 	char* paths = strdup(savePaths);
 	char* rest = paths;
 	char* path;
+	const char* zone = zones ? zones : "";
 	while ((path = strsep(&rest, "\n")) && netplay->playerCount < MAX_GBAS) {
-		if (!setupNetplayCore(netplay->playerCount++, path, epochMs)) {
+		char* end;
+		long minutes = strtol(zone, &end, 10);
+		zone = *end ? end + 1 : end;
+		if (!setupNetplayCore(netplay->playerCount++, path, epochMs, minutes * 60)) {
 			free(paths);
 			destroyNetplay();
 			return false;

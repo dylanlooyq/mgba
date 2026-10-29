@@ -361,8 +361,9 @@ declare namespace mGBA {
      * Starts a netplay session: one GBA per save, all running the same rom, linked by cable (save 1 is the
      * link's first port). Nothing runs until netplayRunFrame; the screen and sound are localPlayer's (0-based).
      * epochMs starts every GBA's clock, which then runs at the emulated rate, so all browsers agree.
+     * zones: each player's UTC offset in minutes east, so their GBA tells the time there in every browser.
      */
-    netplayStart(options: { romPath: string; savePaths: string[]; localPlayer: number; epochMs: number }): boolean;
+    netplayStart(options: { romPath: string; savePaths: string[]; localPlayer: number; epochMs: number; zones?: number[] }): boolean;
 
     /** Runs every GBA for one frame with each player's keys (bitmasks, GBA key order). False if the link hung. */
     netplayRunFrame(keys: number[]): boolean;

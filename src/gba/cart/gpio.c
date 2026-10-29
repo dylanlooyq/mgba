@@ -312,7 +312,12 @@ void _rtcUpdateClock(struct GBACartridgeHardware* hw) {
 	t -= hw->rtc.offset;
 
 	struct tm date;
-	localtime_r(&t, &date);
+	if (hw->rtc.fixedZone) {
+		t += hw->rtc.zoneOffset;
+		gmtime_r(&t, &date);
+	} else {
+		localtime_r(&t, &date);
+	}
 	hw->rtc.time[0] = _rtcBCD(date.tm_year - 100);
 	hw->rtc.time[1] = _rtcBCD(date.tm_mon + 1);
 	hw->rtc.time[2] = _rtcBCD(date.tm_mday);
