@@ -416,6 +416,8 @@ static THREAD_ENTRY _mCoreThreadRun(void* context) {
 						if (dt > maxCatchup) dt = maxCatchup;
 						loop.previousTime = now;
 						loop.accumulator += dt;
+						// Drop time lost to a stall (hidden tab, busy page) rather than racing to make it up
+						if (loop.accumulator > stepMs * maxSteps) loop.accumulator = stepMs * maxSteps;
 
 						int steps = 0;
 						while (loop.accumulator >= stepMs && steps++ < maxSteps) {
