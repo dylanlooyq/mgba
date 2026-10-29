@@ -204,6 +204,7 @@ struct GBAudio {
 
 	size_t samples;
 	bool forceDisableCh[4];
+	int chGain[4]; // 0x100 = full; the wasm build scales music and sound effects apart
 	int masterVolume;
 };
 

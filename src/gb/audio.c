@@ -58,6 +58,9 @@ void GBAudioInit(struct GBAudio* audio, size_t samples, uint8_t* nr52, enum GBAu
 	audio->forceDisableCh[1] = false;
 	audio->forceDisableCh[2] = false;
 	audio->forceDisableCh[3] = false;
+	for (int i = 0; i < 4; ++i) {
+		audio->chGain[i] = 0x100;
+	}
 	audio->masterVolume = GB_AUDIO_VOLUME_MAX;
 	audio->nr52 = nr52;
 	audio->style = style;
@@ -742,36 +745,37 @@ void GBAudioUpdateFrame(struct GBAudio* audio) {
 
 void GBAudioSamplePSG(struct GBAudio* audio, int16_t* left, int16_t* right) {
 	int dcOffset = audio->style == GB_AUDIO_GBA ? 0 : -0x8;
-	int sampleLeft = dcOffset;
-	int sampleRight = dcOffset;
+	// Summed at 0x100 times, each channel by its gain
+	int sampleLeft = dcOffset * 0x100;
+	int sampleRight = dcOffset * 0x100;
 
 	if (!audio->forceDisableCh[0]) {
 		if (audio->ch1Left) {
-			sampleLeft += audio->ch1.sample;
+			sampleLeft += audio->ch1.sample * audio->chGain[0];
 		}
 
 		if (audio->ch1Right) {
-			sampleRight += audio->ch1.sample;
+			sampleRight += audio->ch1.sample * audio->chGain[0];
 		}
 	}
 
 	if (!audio->forceDisableCh[1]) {
 		if (audio->ch2Left) {
-			sampleLeft +=  audio->ch2.sample;
+			sampleLeft += audio->ch2.sample * audio->chGain[1];
 		}
 
 		if (audio->ch2Right) {
-			sampleRight += audio->ch2.sample;
+			sampleRight += audio->ch2.sample * audio->chGain[1];
 		}
 	}
 
 	if (!audio->forceDisableCh[2]) {
 		if (audio->ch3Left) {
-			sampleLeft += audio->ch3.sample;
+			sampleLeft += audio->ch3.sample * audio->chGain[2];
 		}
 
 		if (audio->ch3Right) {
-			sampleRight += audio->ch3.sample;
+			sampleRight += audio->ch3.sample * audio->chGain[2];
 		}
 	}
 
@@ -781,16 +785,16 @@ void GBAudioSamplePSG(struct GBAudio* audio, int16_t* left, int16_t* right) {
 	if (!audio->forceDisableCh[3]) {
 		int16_t sample = audio->style == GB_AUDIO_GBA ? (audio->ch4.sample << 3) : _coalesceNoiseChannel(&audio->ch4);
 		if (audio->ch4Left) {
-			sampleLeft += sample;
+			sampleLeft += sample * audio->chGain[3];
 		}
 
 		if (audio->ch4Right) {
-			sampleRight += sample;
+			sampleRight += sample * audio->chGain[3];
 		}
 	}
 
-	*left = sampleLeft * (1 + audio->volumeLeft);
-	*right = sampleRight * (1 + audio->volumeRight);
+	*left = (sampleLeft >> 8) * (1 + audio->volumeLeft);
+	*right = (sampleRight >> 8) * (1 + audio->volumeRight);
 }
 
 void GBAudioSample(struct GBAudio* audio, int32_t timestamp) {

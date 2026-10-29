@@ -15,6 +15,7 @@
 #include <mgba/core/version.h>
 #include <mgba/gba/core.h>
 #include <mgba/gba/interface.h>
+#include <mgba/internal/gb/gb.h>
 #include <mgba/internal/gba/gba.h>
 #include <mgba/internal/gba/input.h>
 #include <mgba/internal/gba/memory.h>
@@ -285,6 +286,15 @@ EMSCRIPTEN_KEEPALIVE void setVolume(float vol) {
 		mCoreConfigSetDefaultIntValue(&renderer->core->config, "volume", volume);
 		renderer->core->reloadConfigOption(renderer->core, "volume", &renderer->core->config);
 	}
+}
+
+// A Game Boy game's four sound channels' gains, 0-1: the page gives each its music's or its sound effects' volume.
+EMSCRIPTEN_KEEPALIVE void setAudioChannelGain(int channel, float gain) {
+	struct mCore* core = activeInputCore();
+	if (!core || core->platform(core) != mPLATFORM_GB || channel < 0 || channel > 3 || gain < 0 || gain > 1) {
+		return;
+	}
+	((struct GB*) core->board)->audio.chGain[channel] = (int) (gain * 0x100);
 }
 
 EMSCRIPTEN_KEEPALIVE float getVolume() {
