@@ -34,6 +34,7 @@ struct mSDLAudio {
 
 	struct mCore* core;
 	struct mCoreSync* sync;
+	double fill; // the core's buffered samples, smoothed, for rate control
 };
 
 struct mCoreThread;

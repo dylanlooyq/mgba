@@ -12,14 +12,17 @@
 struct mAudioResamplerData {
 	struct mAudioResampler* resampler;
 	unsigned channel;
+	// The source copied out once per process call: peeking the circle buffer for every tap was most of the cost
+	const int16_t* samples;
+	size_t count;
 };
 
 static int16_t _sampleAt(int index, const void* context) {
 	const struct mAudioResamplerData* data = context;
-	if (index < 0) {
+	if (index < 0 || (size_t) index >= data->count) {
 		return 0;
 	}
-	return mAudioBufferPeek(data->resampler->source, data->channel, index);
+	return data->samples[index * data->resampler->source->channels + data->channel];
 }
 
 void mAudioResamplerInit(struct mAudioResampler* resampler, enum mInterpolatorType interpType) {
@@ -78,6 +81,10 @@ size_t mAudioResamplerProcess(struct mAudioResampler* resampler) {
 
 	size_t read = 0;
 	mASSERT(resampler->source->channels <= MAX_CHANNELS);
+	context.count = mAudioBufferAvailable(resampler->source);
+	int16_t* samples = malloc(context.count * resampler->source->channels * sizeof(int16_t) + 1);
+	context.count = samples ? mAudioBufferDump(resampler->source, samples, context.count, 0) : 0;
+	context.samples = samples;
 
 	while (true) {
 		if (timestamp + resampler->highWaterMark >= mAudioBufferAvailable(resampler->source)) {
@@ -98,6 +105,7 @@ size_t mAudioResamplerProcess(struct mAudioResampler* resampler) {
 		timestamp += timestep;
 		++read;
 	}
+	free(samples);
 
 	if (resampler->consume && timestamp > resampler->lowWaterMark) {
 		size_t drop = timestamp - resampler->lowWaterMark;

@@ -61,6 +61,7 @@ bool mSDLInitAudio(struct mSDLAudio* context, struct mCoreThread* threadContext)
 	mAudioBufferInit(&context->buffer, context->samples, context->obtainedSpec.channels);
 	mAudioResamplerInit(&context->resampler, mINTERPOLATOR_SINC);
 	mAudioResamplerSetDestination(&context->resampler, &context->buffer, context->obtainedSpec.freq);
+	context->fill = 0;
 
 	if (threadContext) {
 		context->core = threadContext->core;
@@ -144,7 +145,23 @@ static void _mSDLAudioCallback(void* context, Uint8* data, int len) {
 		audioContext->sync->audioHighWater *= sampleRate / (fauxClock * audioContext->obtainedSpec.freq);
 	}
 
-	mAudioResamplerSetSource(&audioContext->resampler, buffer, sampleRate / fauxClock, true);
+	double rate = sampleRate / fauxClock;
+	if (audioContext->sync && !audioContext->sync->audioWait && buffer) {
+		// Paced by the system clock (timestepSync), the core and the sound card drift apart: nudge the rate by up to
+		// 0.5% (inaudible) to hold the core's buffer near three callbacks, instead of running dry or piling up.
+		double target = 3.0 * audioContext->samples * rate / audioContext->obtainedSpec.freq;
+		double fill = mAudioBufferAvailable(buffer);
+		if (fill > 3 * target) {
+			// After a stall (hidden tab): skip ahead rather than play seconds late
+			mAudioBufferRead(buffer, NULL, fill - target);
+			fill = target;
+			audioContext->fill = target;
+		}
+		audioContext->fill += (fill - audioContext->fill) * 0.05; // the core adds a whole frame's samples at a time
+		double error = (audioContext->fill - target) / target;
+		rate *= 1 + 0.005 * (error > 1 ? 1 : error < -1 ? -1 : error);
+	}
+	mAudioResamplerSetSource(&audioContext->resampler, buffer, rate, true);
 	mAudioResamplerProcess(&audioContext->resampler);
 	if (audioContext->sync) {
 		mCoreSyncConsumeAudio(audioContext->sync);
