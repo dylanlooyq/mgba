@@ -14,6 +14,7 @@
 #include <mgba/core/version.h>
 #include <mgba/gba/core.h>
 #include <mgba/gba/interface.h>
+#include <mgba/internal/gba/gba.h>
 #include <mgba/internal/gba/input.h>
 #include <mgba/internal/gba/memory.h>
 #include <mgba/internal/gba/sio.h>
@@ -977,6 +978,13 @@ EMSCRIPTEN_KEEPALIVE bool netplayStart(const char* romPath, const char* savePath
 		return false;
 	}
 	netplay->localPlayer = localPlayer;
+	// Nobody sees the other players' screens: drawing them would only cost time (phones). What's drawn never reaches
+	// the game's memory, so the frames stay the same in every browser.
+	for (int i = 0; i < netplay->playerCount; ++i) {
+		if (i != localPlayer) {
+			((struct GBA*) netplay->cores[i]->board)->video.frameskip = INT_MAX;
+		}
+	}
 
 	unsigned w, h;
 	netplay->cores[0]->baseVideoSize(netplay->cores[0], &w, &h);
@@ -1080,6 +1088,97 @@ EMSCRIPTEN_KEEPALIVE unsigned netplayStateHash(void) {
 
 EMSCRIPTEN_KEEPALIVE void netplayStop(void) {
 	destroyNetplay();
+}
+
+// A snapshot of every player's GBA (save data and clock included), for a player rejoining a running session. Every
+// browser loads the same one at the same frame, so the GBAs that kept running match the rejoiner's fresh ones.
+// Layout: u32 count, u32 asleep bits, then per GBA a u32 size and its state. netplayStateSize holds the size.
+static uint32_t netplaySnapshotSize = 0;
+
+EMSCRIPTEN_KEEPALIVE uint8_t* netplaySaveState(void) {
+	netplaySnapshotSize = 0;
+	if (!netplay) {
+		return NULL;
+	}
+	struct VFile* vfs[MAX_GBAS] = { 0 };
+	size_t total = 8;
+	bool ok = true;
+	for (int i = 0; i < netplay->playerCount && ok; ++i) {
+		vfs[i] = VFileMemChunk(NULL, 0);
+		ok = vfs[i] && mCoreSaveStateNamed(netplay->cores[i], vfs[i], SAVESTATE_SAVEDATA | SAVESTATE_RTC);
+		total += ok ? 4 + vfs[i]->size(vfs[i]) : 0;
+	}
+	uint8_t* out = ok ? malloc(total) : NULL;
+	if (out) {
+		uint32_t asleep = 0;
+		for (int i = 0; i < netplay->playerCount; ++i) {
+			asleep |= netplay->asleep[i] << i;
+		}
+		STORE_32LE(netplay->playerCount, 0, out);
+		STORE_32LE(asleep, 4, out);
+		size_t at = 8;
+		for (int i = 0; i < netplay->playerCount; ++i) {
+			uint32_t size = vfs[i]->size(vfs[i]);
+			STORE_32LE(size, at, out);
+			vfs[i]->seek(vfs[i], 0, SEEK_SET);
+			vfs[i]->read(vfs[i], out + at + 4, size);
+			at += 4 + size;
+		}
+		netplaySnapshotSize = total;
+	}
+	for (int i = 0; i < MAX_GBAS; ++i) {
+		if (vfs[i]) {
+			vfs[i]->close(vfs[i]);
+		}
+	}
+	return out;
+}
+
+EMSCRIPTEN_KEEPALIVE uint32_t netplayStateSize(void) {
+	return netplaySnapshotSize;
+}
+
+// For the page to hand netplayLoadState a snapshot, and free netplaySaveState's.
+EMSCRIPTEN_KEEPALIVE uint8_t* netplayAlloc(uint32_t size) {
+	return malloc(size);
+}
+
+EMSCRIPTEN_KEEPALIVE void netplayFree(uint8_t* data) {
+	free(data);
+}
+
+EMSCRIPTEN_KEEPALIVE bool netplayLoadState(const uint8_t* data, uint32_t size) {
+	uint32_t count, asleep;
+	if (!netplay || !data || size < 8) {
+		return false;
+	}
+	LOAD_32LE(count, 0, data);
+	LOAD_32LE(asleep, 4, data);
+	if (count != (uint32_t) netplay->playerCount) {
+		return false;
+	}
+	uint32_t at = 8;
+	for (int i = 0; i < netplay->playerCount; ++i) {
+		uint32_t len;
+		if (size - at < 4) {
+			return false;
+		}
+		LOAD_32LE(len, at, data);
+		if (size - at - 4 < len) {
+			return false;
+		}
+		struct VFile* vf = VFileFromConstMemory(data + at + 4, len);
+		bool ok = vf && mCoreLoadStateNamed(netplay->cores[i], vf, SAVESTATE_SAVEDATA | SAVESTATE_RTC);
+		if (vf) {
+			vf->close(vf);
+		}
+		if (!ok) {
+			return false;
+		}
+		netplay->asleep[i] = (asleep >> i) & 1;
+		at += 4 + len;
+	}
+	return true;
 }
 
 EMSCRIPTEN_KEEPALIVE bool saveStateSlot(int slot, int flags) {

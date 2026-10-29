@@ -724,3 +724,20 @@ Module.netplayLocalKeys = () => {
 Module.netplayStateHash = () => cwrap("netplayStateHash", "number", [])() >>> 0;
 
 Module.netplayStop = () => cwrap("netplayStop", null, [])();
+
+Module.netplaySaveState = () => {
+  const ptr = cwrap("netplaySaveState", "number", [])();
+  if (!ptr) return null;
+  const state = HEAPU8.slice(ptr, ptr + cwrap("netplayStateSize", "number", [])());
+  cwrap("netplayFree", null, ["number"])(ptr);
+  return state;
+};
+
+Module.netplayLoadState = (state) => {
+  const ptr = cwrap("netplayAlloc", "number", ["number"])(state.length);
+  if (!ptr) return false;
+  HEAPU8.set(state, ptr);
+  const ok = cwrap("netplayLoadState", "boolean", ["number", "number"])(ptr, state.length);
+  cwrap("netplayFree", null, ["number"])(ptr);
+  return ok;
+};

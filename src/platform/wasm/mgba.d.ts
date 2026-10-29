@@ -376,6 +376,12 @@ declare namespace mGBA {
     /** Ends the netplay session and frees its GBAs. */
     netplayStop(): void;
 
+    /** Every GBA's state (save data and clock included), for a player rejoining; null if there's no session. */
+    netplaySaveState(): Uint8Array<ArrayBuffer> | null;
+
+    /** Loads netplaySaveState's snapshot into this session's GBAs (the same number of them). */
+    netplayLoadState(state: Uint8Array): boolean;
+
     /**
      * Loads a save state from a given slot.
      *
