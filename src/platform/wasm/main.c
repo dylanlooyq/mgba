@@ -253,6 +253,17 @@ EMSCRIPTEN_KEEPALIVE void buttonUnpress(int id) {
 	}
 }
 
+// The site's Time of day setting: the game's clock runs this many hours ahead of the real one (0: the real clock).
+// Not in netplay, whose GBAs share one clock.
+EMSCRIPTEN_KEEPALIVE void setClockHours(int hours) {
+	struct mCore* core = renderer ? renderer->core : NULL;
+	if (!core || netplay) {
+		return;
+	}
+	core->rtc.value = hours * 3600000LL;
+	core->rtc.override = hours ? RTC_WALLCLOCK_OFFSET : RTC_NO_OVERRIDE;
+}
+
 EMSCRIPTEN_KEEPALIVE void toggleRewind(bool toggle) {
 	if (renderer->thread)
 		mCoreThreadSetRewinding(renderer->thread, toggle);
