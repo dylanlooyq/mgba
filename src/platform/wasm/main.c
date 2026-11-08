@@ -269,6 +269,12 @@ EMSCRIPTEN_KEEPALIVE void toggleRewind(bool toggle) {
 		mCoreThreadSetRewinding(renderer->thread, toggle);
 }
 
+// Netplay's GBAs run at the speed the page paces netplayRunFrame at, with no sync to read it from: the sound plays
+// at that speed (or kept in pitch, setKeepAudioPitch) instead of piling up and skipping.
+EMSCRIPTEN_KEEPALIVE void setNetplaySpeed(double speed) {
+	renderer->audio.speed = speed;
+}
+
 EMSCRIPTEN_KEEPALIVE void setVolume(float vol) {
 	if (vol > 2.0 || vol < 0)
 		return; // this is a percentage so more than 200% is insane.

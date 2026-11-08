@@ -35,6 +35,7 @@ struct mSDLAudio {
 	struct mCore* core;
 	struct mCoreSync* sync;
 	double fill; // the core's buffered samples, smoothed, for rate control
+	double speed; // without a sync (wasm netplay): the game speed the page runs the core at; 0 = not told
 };
 
 struct mCoreThread;

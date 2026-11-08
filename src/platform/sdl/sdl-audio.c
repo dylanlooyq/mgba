@@ -272,11 +272,14 @@ static void _mSDLAudioCallback(void* context, Uint8* data, int len) {
 		audioContext->sync->audioHighWater = 2 * audioContext->samples + audioContext->resampler.highWaterMark +
 		    audioContext->resampler.lowWaterMark + (audioContext->samples >> 6);
 		audioContext->sync->audioHighWater *= sampleRate / (fauxClock * audioContext->obtainedSpec.freq);
+	} else if (audioContext->speed > 0) {
+		fauxClock = 1 / audioContext->speed; // netplay: the page runs frames at the GBA's own rate times this
 	}
 
 	double rate = sampleRate / fauxClock;
 	// fpsTarget is 60 times the game speed (main.ts: 1.5x is 2x at 45 fps)
-	double speed = audioContext->sync && audioContext->sync->fpsTarget > 0 ? audioContext->sync->fpsTarget / 60 : 1;
+	double speed = audioContext->sync && audioContext->sync->fpsTarget > 0 ? audioContext->sync->fpsTarget / 60
+	    : !audioContext->sync && audioContext->speed > 0 ? audioContext->speed : 1;
 	if (_stretch.on && buffer && fabs(speed - 1) > 0.01) {
 		if (!_stretch.active || _stretch.rate != sampleRate) {
 			_stretchReset(sampleRate);
@@ -302,7 +305,8 @@ static void _mSDLAudioCallback(void* context, Uint8* data, int len) {
 		_stretch.active = false;
 	}
 	bool silent = false;
-	if (audioContext->sync && !audioContext->sync->audioWait && buffer) {
+	// Netplay has no sync and is paced by the page's timer: held the same way once the page says its speed
+	if ((audioContext->sync ? !audioContext->sync->audioWait : audioContext->speed > 0) && buffer) {
 		// Paced by the system clock (timestepSync), the core and the sound card drift apart: nudge the rate by up to
 		// 0.5% (inaudible) to hold the core's buffer near three callbacks, instead of running dry or piling up.
 		double target = 3.0 * audioContext->samples * rate / audioContext->obtainedSpec.freq;
