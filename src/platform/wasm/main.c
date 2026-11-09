@@ -305,6 +305,12 @@ EMSCRIPTEN_KEEPALIVE void setVolume(float vol) {
 	}
 }
 
+// A GBA game's Game Boy channels step envelopes, lengths and sweeps this many times slower (1-8; src/gb/audio.c).
+extern double GBAudioFrameSlow;
+EMSCRIPTEN_KEEPALIVE void setPsgSlow(double slow) {
+	GBAudioFrameSlow = slow >= 1 && slow <= 8 ? slow : 1;
+}
+
 // A Game Boy game's four sound channels' gains, 0-1: the page gives each its music's or its sound effects' volume.
 EMSCRIPTEN_KEEPALIVE void setAudioChannelGain(int channel, float gain) {
 	struct mCore* core = activeInputCore();

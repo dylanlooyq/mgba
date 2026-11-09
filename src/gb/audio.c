@@ -476,11 +476,16 @@ void GBAudioWriteNR52(struct GBAudio* audio, uint8_t value) {
 	}
 }
 
+// How many times slower than the hardware a GBA's Game Boy channels step their envelopes, lengths and sweeps (1 = as
+// hardware). The site's "Music at 1x" slows a sped-up game's music by its speed; this slows these alike, so the notes
+// ring out as at 1x once the sound is stretched back to real time. Not saved in states: the page sets it each frame.
+double GBAudioFrameSlow = 1;
+
 void _updateFrame(struct mTiming* timing, void* user, uint32_t cyclesLate) {
 #ifdef M_CORE_GBA
 	struct GBAAudio* audio = user;
 	GBAAudioSample(audio, mTimingCurrentTime(timing));
-	mTimingSchedule(timing, &audio->psg.frameEvent, audio->psg.timingFactor * FRAME_CYCLES - cyclesLate);
+	mTimingSchedule(timing, &audio->psg.frameEvent, (int32_t) (audio->psg.timingFactor * FRAME_CYCLES * GBAudioFrameSlow) - cyclesLate);
 	GBAudioUpdateFrame(&audio->psg);
 #endif
 }
