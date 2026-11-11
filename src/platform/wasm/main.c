@@ -78,6 +78,8 @@ typedef struct {
 } mEmscriptenNetplay;
 
 static mEmscriptenNetplay* netplay = NULL;
+// netplayStart(keepGame): the page's own game waits, paused, through the session, and lends it its sound device.
+static bool netplayKeptGame = false;
 static void destroyNetplay(void);
 
 // log utilities
@@ -879,11 +881,17 @@ static void destroyNetplay(void) {
 	if (!netplay) {
 		return;
 	}
-	if (renderer->audio.core) {
+	if (netplayKeptGame && renderer->core && renderer->thread) {
+		// The kept game gets its sound device back, never closed: a Web Audio device closed and opened again can
+		// still call back into the old one. Its thread stays paused: the page loads the state it wants, then resumes.
+		renderer->audio.core = renderer->core;
+		renderer->audio.sync = &renderer->thread->impl->sync;
+	} else if (renderer->audio.core) {
 		mSDLPauseAudio(&renderer->audio);
 		mSDLDeinitAudio(&renderer->audio);
 		renderer->audio.core = NULL;
 	}
+	netplayKeptGame = false;
 	for (int i = 0; i < netplay->playerCount; ++i) {
 		struct mCore* core = netplay->cores[i];
 		if (core) {
@@ -978,15 +986,21 @@ static bool setupNetplayCore(int index, const char* savePath, double epochMs, in
 
 // savePaths: one per player, joined by '\n' (player 1's is the link's first port). epochMs: the shared clock's start.
 // zones: each player's UTC offset in minutes east, joined by '\n', for their GBA's clock (missing ones are UTC).
-EMSCRIPTEN_KEEPALIVE bool netplayStart(const char* romPath, const char* savePaths, int localPlayer, double epochMs, const char* zones) {
+// keepGame: the page's own game isn't quit but paused (mCoreThreadPause), and stays loaded under the session (its
+// memory, ROM and sound device untouched) for the page to go back to: load a state into it and resumeGame.
+EMSCRIPTEN_KEEPALIVE bool netplayStart(const char* romPath, const char* savePaths, int localPlayer, double epochMs, const char* zones, bool keepGame) {
 	if (!renderer || !romPath || !savePaths) {
 		return false;
 	}
-	if (renderer->core && renderer->thread) {
+	bool kept = keepGame && renderer->core && renderer->thread;
+	if (kept) {
+		mCoreThreadPause(renderer->thread);
+	} else if (renderer->core && renderer->thread) {
 		quitGame();
 	}
 	destroyLinkSession();
 	destroyNetplay();
+	netplayKeptGame = kept;
 
 	struct VFile* vf = VFileOpen(romPath, O_RDONLY);
 	if (!vf) {
@@ -1046,7 +1060,11 @@ EMSCRIPTEN_KEEPALIVE bool netplayStart(const char* romPath, const char* savePath
 	    w, h);
 
 	// Only our player's sound. Without a sync object the other cores' sound buffers just fill and drop.
-	if (mSDLInitAudio(&renderer->audio, NULL)) {
+	if (netplayKeptGame && renderer->audio.core) { // the kept game's device, as it is
+		renderer->audio.core = netplay->cores[localPlayer];
+		renderer->audio.sync = NULL;
+		mSDLResumeAudio(&renderer->audio);
+	} else if (mSDLInitAudio(&renderer->audio, NULL)) {
 		renderer->audio.core = netplay->cores[localPlayer];
 		renderer->audio.sync = NULL;
 		mSDLResumeAudio(&renderer->audio);

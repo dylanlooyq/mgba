@@ -701,13 +701,14 @@ Module.linkLocalGetStatus = () => {
 };
 
 // Netplay: every player's GBA in this one emulator, stepped a frame at a time by the page (see netplayStart in main.c).
-Module.netplayStart = ({ romPath, savePaths, localPlayer, epochMs, zones = [] }) =>
-  cwrap("netplayStart", "boolean", ["string", "string", "number", "number", "string"])(
+Module.netplayStart = ({ romPath, savePaths, localPlayer, epochMs, zones = [], keepGame = false }) =>
+  cwrap("netplayStart", "boolean", ["string", "string", "number", "number", "string", "boolean"])(
     romPath,
     savePaths.join("\n"),
     localPlayer,
     epochMs,
     zones.join("\n"),
+    keepGame,
   );
 
 let netplayRunFrame;
