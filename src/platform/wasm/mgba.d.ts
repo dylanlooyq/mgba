@@ -383,6 +383,9 @@ declare namespace mGBA {
     /** Loads netplaySaveState's snapshot into this session's GBAs (the same number of them). */
     netplayLoadState(state: Uint8Array): boolean;
 
+    /** After netplayLoadState of states saved apart (each player's own game): plugs every GBA's cable in afresh, as at boot. */
+    netplayReplug(): void;
+
     /**
      * Loads a save state from a given slot.
      *

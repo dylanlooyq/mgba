@@ -726,6 +726,8 @@ Module.netplayStateHash = () => cwrap("netplayStateHash", "number", [])() >>> 0;
 
 Module.netplayStop = () => cwrap("netplayStop", null, [])();
 
+Module.netplayReplug = () => cwrap("netplayReplug", null, [])();
+
 Module.netplaySaveState = () => {
   const ptr = cwrap("netplaySaveState", "number", [])();
   if (!ptr) return null;

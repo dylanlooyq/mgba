@@ -1135,6 +1135,27 @@ EMSCRIPTEN_KEEPALIVE void netplayStop(void) {
 	destroyNetplay();
 }
 
+// After netplayLoadState of GBAs saved apart (each player's own game, not one netplay snapshot): a fresh cable. Each
+// link's timing is an offset from its GBA's clock, taken when it was plugged in; loading a state moves that clock, so
+// the GBAs' link times no longer agree and they never connect. Unplug every GBA, then plug them back in seat order,
+// as at boot: each is plugged in, then sets its link mode afresh (as GBASIOReset does), before the next. The cable
+// only hears of a mode when it changes; without that nobody sees everyone ready, so nobody becomes the master.
+EMSCRIPTEN_KEEPALIVE void netplayReplug(void) {
+	if (!netplay) {
+		return;
+	}
+	for (int i = 0; i < netplay->playerCount; ++i) {
+		netplay->sioDrivers[i].d.deinit(&netplay->sioDrivers[i].d);
+		netplay->asleep[i] = false;
+	}
+	for (int i = 0; i < netplay->playerCount; ++i) {
+		struct GBASIO* sio = netplay->sioDrivers[i].d.p; // the library's own pointer: struct GBA's layout differs here
+		sio->mode = -1;
+		netplay->sioDrivers[i].d.reset(&netplay->sioDrivers[i].d);
+		GBASIOWriteRCNT(sio, sio->rcnt);
+	}
+}
+
 // A snapshot of every player's GBA (save data and clock included), for a player rejoining a running session. Every
 // browser loads the same one at the same frame, so the GBAs that kept running match the rejoiner's fresh ones.
 // Layout: u32 count, u32 asleep bits, then per GBA a u32 size and its state. netplayStateSize holds the size.
