@@ -21,6 +21,7 @@
 #include <mgba/internal/gba/memory.h>
 #include <mgba/internal/gba/sio.h>
 #include <mgba/internal/gba/sio/lockstep.h>
+#include <mgba/internal/gba/sio/netcable.h>
 
 #include "platform/sdl/sdl-audio.h"
 #include "platform/sdl/sdl-events.h"
@@ -1172,6 +1173,56 @@ EMSCRIPTEN_KEEPALIVE void netplayReplug(void) {
 		netplay->sioDrivers[i].d.reset(&netplay->sioDrivers[i].d);
 		GBASIOWriteRCNT(sio, sio->rcnt);
 	}
+}
+
+// The network link cable (gba/sio/netcable.c) in the page's own game: Pokémon Gen 3's link layer to GBAs in other
+// browsers, each running its own ROM. players 0 or 1 unplugs it.
+static struct GBASIONetCable netCable;
+static struct mCore* netCableCore = NULL;
+static uint16_t netCableTakeBuf[64 * NETCABLE_RECORD];
+
+EMSCRIPTEN_KEEPALIVE bool netcablePlug(int seat, int players) {
+	struct mCore* core = renderer ? renderer->core : NULL;
+	if (!core || netplay || core->platform(core) != mPLATFORM_GBA) {
+		return false;
+	}
+	if (renderer->thread) {
+		mCoreThreadInterrupt(renderer->thread);
+	}
+	if (!netCableCore) {
+		GBASIONetCableCreate(&netCable);
+	} else if (netCableCore != core) {
+		netCable.d.p = NULL; // that game was quit: its timing is gone
+	}
+	GBASIONetCablePlug(&netCable, seat, players);
+	core->setPeripheral(core, mPERIPH_GBA_LINK_PORT, players > 1 ? &netCable.d : NULL);
+	netCableCore = core;
+	if (renderer->thread) {
+		mCoreThreadContinue(renderer->thread);
+	}
+	return true;
+}
+
+EMSCRIPTEN_KEEPALIVE bool netcablePush(const uint16_t* entry) {
+	return netCableCore && GBASIONetCablePush(&netCable, entry);
+}
+
+EMSCRIPTEN_KEEPALIVE void netcableConfirm(void) {
+	if (netCableCore) {
+		GBASIONetCableConfirm(&netCable);
+	}
+}
+
+EMSCRIPTEN_KEEPALIVE int netcableTake(void) {
+	return netCableCore ? GBASIONetCableTake(&netCable, netCableTakeBuf, 64) : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE uint16_t* netcableTakeBuffer(void) {
+	return netCableTakeBuf;
+}
+
+EMSCRIPTEN_KEEPALIVE int netcableStatus(void) {
+	return netCableCore ? GBASIONetCableStatus(&netCable) : 0;
 }
 
 // A snapshot of every player's GBA (save data and clock included), for a player rejoining a running session. Every

@@ -389,6 +389,24 @@ declare namespace mGBA {
     netplayReplug(): void;
 
     /**
+     * Plugs a network link cable into this page's game (Pokémon Gen 3's link layer, to GBAs in other browsers each
+     * running its own ROM): this GBA is seat (0 = the master) of players. players 0 unplugs it.
+     */
+    netcablePlug(seat: number, players: number): boolean;
+
+    /** One entry of the shared order the game hears: 4 players x 8 words. False if the cable's queue is full. */
+    netcablePush(entry: Uint16Array): boolean;
+
+    /** Seat 0's leader confirmed the players: this slave's handshake may finish. */
+    netcableConfirm(): void;
+
+    /** What the cable sent since the last call: [kind, 8 words] each; kind 1 a command, 2 seat 0's confirm. */
+    netcableTake(): Uint16Array[];
+
+    /** phase (0 idle, 1 handshake, 2 linked) | entries waiting << 4. */
+    netcableStatus(): number;
+
+    /**
      * Loads a save state from a given slot.
      *
      * @param slot - State slot index.

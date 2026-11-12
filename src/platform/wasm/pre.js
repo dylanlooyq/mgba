@@ -729,6 +729,19 @@ Module.netplayStop = () => cwrap("netplayStop", null, [])();
 
 Module.netplayReplug = () => cwrap("netplayReplug", null, [])();
 
+Module.netcablePlug = (seat, players) => cwrap("netcablePlug", "boolean", ["number", "number"])(seat, players);
+Module.netcablePush = (entry) =>
+  cwrap("netcablePush", "boolean", ["array"])(new Uint8Array(entry.buffer, entry.byteOffset, 64));
+Module.netcableConfirm = () => cwrap("netcableConfirm", null, [])();
+Module.netcableTake = () => {
+  const n = cwrap("netcableTake", "number", [])();
+  if (!n) return [];
+  const ptr = cwrap("netcableTakeBuffer", "number", [])();
+  const words = new Uint16Array(HEAPU8.buffer.slice(ptr, ptr + n * 18));
+  return Array.from({ length: n }, (_, i) => words.subarray(i * 9, i * 9 + 9));
+};
+Module.netcableStatus = () => cwrap("netcableStatus", "number", [])();
+
 Module.netplaySaveState = () => {
   const ptr = cwrap("netplaySaveState", "number", [])();
   if (!ptr) return null;
